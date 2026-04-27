@@ -493,8 +493,8 @@ write_caddyfile() {
     }
 }
 
-https://${DOMAIN}:${BACKEND_PORT} {
-    bind 127.0.0.1
+https://${DOMAIN} {
+    bind 127.0.0.1:${BACKEND_PORT}
 
     tls ${LE_DIR}/${DOMAIN}/fullchain.pem ${LE_DIR}/${DOMAIN}/privkey.pem
 
@@ -508,7 +508,6 @@ https://${DOMAIN}:${BACKEND_PORT} {
 
         reverse_proxy ${MASK_SITE} {
             header_up Host {upstream_hostport}
-            header_up X-Forwarded-Host {host}
         }
     }
 }
