@@ -400,7 +400,7 @@ write_caddyfile() {
     mkdir -p "$CADDY_DIR"
     cat > "$CADDYFILE" <<EOF
 :443, ${DOMAIN}
-tls
+tls naive@${DOMAIN}
 
 route {
   forward_proxy {
