@@ -172,7 +172,12 @@ journalctl -u caddy -n 100       # last 100 lines
 cat /etc/caddy/credentials.txt   # creds (if you lost them)
 ```
 
-To change domain / mask / credentials — edit `/etc/caddy/Caddyfile` and `systemctl reload caddy`. Or rerun the script and pick option «2) Keep existing Caddy binary, regenerate Caddyfile».
+To change domain / mask / credentials — edit `/etc/caddy/Caddyfile` and `systemctl reload caddy`. Or rerun the script — when an existing install is detected it offers a menu:
+
+1. Rebuild Caddy from sources + regenerate Caddyfile (new credentials), restart
+2. Keep existing Caddy binary + regenerate Caddyfile (new credentials), restart
+3. **Reuse existing Caddyfile and credentials, just restart** — useful for pulling fresh QR / config output without invalidating credentials you've already shared with clients
+4. Exit, leave system untouched
 
 ## Troubleshooting
 

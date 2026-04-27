@@ -174,7 +174,7 @@ check_ports() {
 }
 
 handle_existing_caddy() {
-    # Returns mode via stdout: "rebuild" | "reconfigure" | "fresh"
+    # Returns mode via stdout: "rebuild" | "reconfigure" | "reuse" | "fresh"
     if [[ ! -x "$CADDY_BIN" ]] && ! systemctl list-unit-files caddy.service >/dev/null 2>&1; then
         echo "fresh"
         return 0
@@ -185,23 +185,72 @@ handle_existing_caddy() {
         warn "caddy.service is currently active." >&2
     fi
 
+    local has_caddyfile=0
+    [[ -s "$CADDYFILE" ]] && has_caddyfile=1
+
     echo "" >&2
     echo "Choose action:" >&2
-    echo "  1) Rebuild Caddy from sources, regenerate Caddyfile, restart" >&2
-    echo "  2) Keep existing Caddy binary, regenerate Caddyfile, restart" >&2
-    echo "  3) Exit, leave system untouched" >&2
+    echo "  1) Rebuild Caddy from sources + regenerate Caddyfile (new credentials), restart" >&2
+    echo "  2) Keep existing Caddy binary + regenerate Caddyfile (new credentials), restart" >&2
+    if [[ "$has_caddyfile" -eq 1 ]]; then
+        echo "  3) Reuse existing Caddyfile and credentials, just restart" >&2
+        echo "  4) Exit, leave system untouched" >&2
+    else
+        echo "  3) Exit, leave system untouched" >&2
+        echo "     (option to reuse existing Caddyfile is unavailable: ${CADDYFILE} missing or empty)" >&2
+    fi
     echo "" >&2
 
-    local choice
+    local choice prompt
+    if [[ "$has_caddyfile" -eq 1 ]]; then
+        prompt="Enter 1, 2, 3 or 4: "
+    else
+        prompt="Enter 1, 2 or 3: "
+    fi
+
     while true; do
-        read -r -p "Enter 1, 2 or 3: " choice </dev/tty
+        read -r -p "$prompt" choice </dev/tty
         case "$choice" in
             1) echo "rebuild";     return 0 ;;
             2) echo "reconfigure"; return 0 ;;
-            3) die "Exited by user choice." ;;
+            3)
+                if [[ "$has_caddyfile" -eq 1 ]]; then
+                    echo "reuse"
+                    return 0
+                else
+                    die "Exited by user choice."
+                fi
+                ;;
+            4)
+                if [[ "$has_caddyfile" -eq 1 ]]; then
+                    die "Exited by user choice."
+                else
+                    echo "Invalid choice." >&2
+                fi
+                ;;
             *) echo "Invalid choice." >&2 ;;
         esac
     done
+}
+
+parse_existing_caddyfile() {
+    # Populates DOMAIN, MASK_SITE, NAIVE_USER, NAIVE_PASS from the existing Caddyfile.
+    # Expects the format this script writes; bails out otherwise.
+    local f="$CADDYFILE"
+    [[ -s "$f" ]] || die "Cannot reuse: ${f} missing or empty"
+
+    DOMAIN="$(awk '/^:443,/ {sub(/^:443,[[:space:]]*/, ""); sub(/[[:space:]]*$/, ""); print; exit}' "$f")"
+    MASK_SITE="$(awk '/^[[:space:]]*reverse_proxy[[:space:]]/ {print $2; exit}' "$f")"
+
+    local creds_line
+    creds_line="$(awk '/^[[:space:]]*basic_auth[[:space:]]/ {print $2, $3; exit}' "$f")"
+    NAIVE_USER="${creds_line%% *}"
+    NAIVE_PASS="${creds_line##* }"
+
+    [[ -n "$DOMAIN"     ]] || die "Failed to parse domain from ${f} (expected ':443, <domain>' line)"
+    [[ -n "$MASK_SITE"  ]] || die "Failed to parse mask site from ${f} (expected 'reverse_proxy <url>' line)"
+    [[ -n "$NAIVE_USER" && -n "$NAIVE_PASS" && "$NAIVE_USER" != "$NAIVE_PASS" ]] \
+        || die "Failed to parse credentials from ${f} (expected 'basic_auth <user> <pass>' line)"
 }
 
 #─────────────────────────────────────────────────────────────────────────────
@@ -526,22 +575,29 @@ main() {
     ARCH="$(detect_arch)"
     ok "Architecture: $ARCH"
 
-    gather_inputs
-    echo
-    log "About to set up NaiveProxy on this server with:"
-    log "  Domain:    $DOMAIN"
-    log "  Mask site: $MASK_SITE"
-    echo
-    confirm "Proceed" default-yes || die "Aborted by user."
-
     install_dependencies
-
-    check_dns "$DOMAIN"
-    check_ports
 
     MODE="$(handle_existing_caddy)"
     log "Install mode: $MODE"
 
+    if [[ "$MODE" == "reuse" ]]; then
+        parse_existing_caddyfile
+        log "Reusing existing Caddyfile:"
+        log "  Domain:    $DOMAIN"
+        log "  Mask site: $MASK_SITE"
+        log "  User/pass: preserved from existing config"
+    else
+        gather_inputs
+        echo
+        log "About to set up NaiveProxy on this server with:"
+        log "  Domain:    $DOMAIN"
+        log "  Mask site: $MASK_SITE"
+        echo
+        confirm "Proceed" default-yes || die "Aborted by user."
+        check_dns "$DOMAIN"
+    fi
+
+    check_ports
     enable_bbr
 
     if [[ "$MODE" == "rebuild" || "$MODE" == "fresh" ]]; then
@@ -550,8 +606,11 @@ main() {
         install_caddy_binary
     fi
 
-    generate_credentials
-    write_caddyfile
+    if [[ "$MODE" != "reuse" ]]; then
+        generate_credentials
+        write_caddyfile
+    fi
+
     write_systemd_unit
     start_caddy
     wait_for_caddy_active
